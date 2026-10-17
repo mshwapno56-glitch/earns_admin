@@ -1,0 +1,285 @@
+<!doctype html>
+<html lang="bn">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>EarnAds Admin</title>
+<style>
+  :root { --bg:#f4f6f8; --card:#fff; --text:#1d2733; --muted:#6b7785; --pri:#2563eb; --ok:#16a34a; --bad:#dc2626; --line:#e2e8f0; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#0f141a; --card:#18202a; --text:#e6edf3; --muted:#8b98a5; --line:#2a3541; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; font-family: system-ui, sans-serif; background:var(--bg); color:var(--text); }
+  main { max-width: 760px; margin: 0 auto; padding: 16px; }
+  h1 { font-size: 20px; margin: 8px 0 12px; }
+  .card { background:var(--card); border:1px solid var(--line); border-radius:12px; padding:14px; margin-bottom:10px; }
+  input, select, textarea, button { font: inherit; padding: 10px 12px; border-radius: 8px; border:1px solid var(--line); background:var(--card); color:var(--text); }
+  input, select, textarea { width:100%; margin-bottom:8px; }
+  button { cursor:pointer; background:var(--pri); color:#fff; border:0; margin-right:6px; margin-bottom:4px; }
+  button.ok { background:var(--ok); } button.bad { background:var(--bad); } button.ghost { background:transparent; color:var(--pri); border:1px solid var(--pri); }
+  .tabs { display:flex; gap:6px; margin-bottom:12px; flex-wrap:wrap; }
+  .tabs button { background:transparent; color:var(--text); border:1px solid var(--line); }
+  .tabs button.active { background:var(--pri); color:#fff; border-color:var(--pri); }
+  .muted { color:var(--muted); font-size:14px; }
+  .row { display:flex; justify-content:space-between; gap:8px; flex-wrap:wrap; align-items:center; }
+  label { display:block; font-size:14px; color:var(--muted); margin-bottom:2px; }
+  #msg { margin: 8px 0; font-size:14px; min-height:18px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>EarnAds অ্যাডমিন</h1>
+  <div id="msg" class="muted"></div>
+
+  <section id="setup" class="card" hidden>
+    <b>প্রথমবার সেটআপ (একবারই লাগবে)</b>
+    <p class="muted">Firebase Console → Project settings → Your apps → Web অ্যাপের <b>firebaseConfig</b> পুরোটা কপি করে নিচে পেস্ট করুন।</p>
+    <textarea id="cfgText" rows="8" placeholder='const firebaseConfig = { apiKey: "...", authDomain: "...", projectId: "...", appId: "..." };'></textarea>
+    <button id="saveCfg">সেভ করুন</button>
+  </section>
+
+  <section id="login" class="card" hidden>
+    <label>ইউজারনেম</label><input id="lu" autocomplete="username">
+    <label>পাসওয়ার্ড</label><input id="lp" type="password" autocomplete="current-password">
+    <button id="loginBtn">লগইন</button>
+    <button class="ghost" id="resetCfg">কনফিগ বদলান</button>
+  </section>
+
+  <section id="app" hidden>
+    <div class="row" style="margin-bottom:10px">
+      <span class="muted" id="who"></span>
+      <span><button class="ghost" id="reloadBtn">রিফ্রেশ</button><button class="ghost" id="logoutBtn">লগআউট</button></span>
+    </div>
+    <div class="tabs">
+      <button data-tab="wd" class="active">উইথড্র</button>
+      <button data-tab="users">ইউজার</button>
+      <button data-tab="settings">সেটিংস</button>
+    </div>
+
+    <div id="tab-wd">
+      <select id="wdStatus">
+        <option value="pending">অপেক্ষমাণ</option>
+        <option value="approved">পরিশোধিত</option>
+        <option value="rejected">বাতিল</option>
+      </select>
+      <div id="wdList"></div>
+    </div>
+
+    <div id="tab-users" hidden>
+      <input id="userSearch" placeholder="ইউজারনেম বা নম্বর দিয়ে খুঁজুন">
+      <div id="userList"></div>
+    </div>
+
+    <div id="tab-settings" hidden>
+      <div class="card">
+        <label>প্রতি এডে পয়েন্ট</label><input id="s_pointsPerAd" type="number" min="0">
+        <label>দৈনিক এড লিমিট</label><input id="s_dailyAdLimit" type="number" min="1">
+        <label>দুই এডের মাঝে ন্যূনতম বিরতি (সেকেন্ড)</label><input id="s_minGapSeconds" type="number" min="0">
+        <label>ন্যূনতম উইথড্র (পয়েন্ট)</label><input id="s_minWithdrawPoints" type="number" min="1">
+        <label>কত পয়েন্টে ১ টাকা</label><input id="s_pointsPerTaka" type="number" min="1">
+        <label>অ্যাপে দেখানোর নোটিশ (ঐচ্ছিক)</label><input id="s_notice">
+        <button id="saveSettings">সেভ করুন</button>
+        <p class="muted">প্রথমবার সেভ করলে সেটিংস ডকুমেন্ট নিজে তৈরি হবে।</p>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, getDocs, query, where, limit, writeBatch, increment, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+
+// অ্যাপের অ্যাডমিন ইউজারনেমের ইমেইল। firestore.rules এর সাথে মিলতে হবে।
+const ADMIN_EMAIL = "shwapno@earnads.app";
+const CFG_KEY = "earnads_admin_cfg";
+
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
+const say = (t) => { $("msg").textContent = t || ""; };
+
+let auth, db, allUsers = [];
+
+// firebaseConfig পেস্ট করা লেখা থেকে দরকারি মান বের করে (JS অবজেক্ট বা JSON দুটোই চলে)
+function parseCfg(text) {
+  const get = (k) => {
+    const m = text.match(new RegExp(k + "[\"']?\\s*[:=]\\s*[\"']([^\"']+)[\"']"));
+    return m ? m[1] : "";
+  };
+  const c = { apiKey: get("apiKey"), authDomain: get("authDomain"), projectId: get("projectId"), appId: get("appId") };
+  if (!c.apiKey || !c.projectId) return null;
+  if (!c.authDomain) c.authDomain = c.projectId + ".firebaseapp.com";
+  return c;
+}
+
+let saved = null;
+try { saved = JSON.parse(localStorage.getItem(CFG_KEY) || "null"); } catch (e) { saved = null; }
+if (saved && saved.apiKey && saved.projectId) start(saved); else $("setup").hidden = false;
+
+$("saveCfg").onclick = () => {
+  const c = parseCfg($("cfgText").value);
+  if (!c) { say("কনফিগ বোঝা যায়নি। apiKey ও projectId সহ পুরো লেখা পেস্ট করুন।"); return; }
+  try { localStorage.setItem(CFG_KEY, JSON.stringify(c)); } catch (e) {}
+  $("setup").hidden = true; say("");
+  start(c);
+};
+$("resetCfg").onclick = () => {
+  try { localStorage.removeItem(CFG_KEY); } catch (e) {}
+  location.reload();
+};
+
+function start(cfg) {
+  const fb = initializeApp(cfg);
+  auth = getAuth(fb);
+  db = getFirestore(fb);
+
+  onAuthStateChanged(auth, async (user) => {
+    if (!user) { $("login").hidden = false; $("app").hidden = true; return; }
+    if ((user.email || "").toLowerCase() !== ADMIN_EMAIL) {
+      say("এই অ্যাকাউন্ট অ্যাডমিন নয়।");
+      await signOut(auth);
+      return;
+    }
+    say("");
+    $("login").hidden = true; $("app").hidden = false;
+    $("who").textContent = user.email.split("@")[0];
+    loadWithdrawals(); loadSettings();
+  });
+}
+
+$("loginBtn").onclick = async () => {
+  say("");
+  try {
+    const u = $("lu").value.trim().toLowerCase();
+    await signInWithEmailAndPassword(auth, u + "@earnads.app", $("lp").value);
+  } catch (e) { say("লগইন ব্যর্থ: ইউজারনেম বা পাসওয়ার্ড ভুল, অথবা কনফিগ ঠিক নেই (" + (e.code || e.message) + ")"); }
+};
+$("logoutBtn").onclick = () => signOut(auth);
+$("reloadBtn").onclick = () => { loadWithdrawals(); loadSettings(); allUsers = []; if (!$("tab-users").hidden) loadUsers(); };
+
+document.querySelectorAll(".tabs button").forEach((b) => {
+  b.onclick = () => {
+    document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
+    for (const t of ["wd", "users", "settings"]) $("tab-" + t).hidden = (t !== b.dataset.tab);
+    if (b.dataset.tab === "users" && !allUsers.length) loadUsers();
+  };
+});
+
+// ---------- উইথড্র ----------
+$("wdStatus").onchange = loadWithdrawals;
+
+async function loadWithdrawals() {
+  const box = $("wdList");
+  box.textContent = "লোড হচ্ছে...";
+  try {
+    const snap = await getDocs(query(collection(db, "withdrawals"), where("status", "==", $("wdStatus").value), limit(100)));
+    if (snap.empty) { box.textContent = "কিছু নেই"; return; }
+    const rows = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.createdAt?.seconds ?? 0) - (b.createdAt?.seconds ?? 0));
+    box.innerHTML = rows.map((w) => {
+      const taka = (w.points / (w.rate || 1)).toFixed(2);
+      const when = w.createdAt ? new Date(w.createdAt.seconds * 1000).toLocaleString("bn-BD") : "";
+      const actions = w.status === "pending"
+        ? `<div style="margin-top:8px"><button class="ok" data-act="approve" data-id="${esc(w.id)}">পরিশোধ করেছি</button>
+           <button class="bad" data-act="reject" data-id="${esc(w.id)}">বাতিল</button></div>` : "";
+      return `<div class="card"><div class="row"><b>৳ ${esc(taka)}</b><span class="muted">${esc(when)}</span></div>
+        <div>${esc(w.method)}: <b>${esc(w.number)}</b></div>
+        <div class="muted">ইউজার: ${esc(w.username)} · ${esc(w.points)} পয়েন্ট (রেট ${esc(w.rate)})</div>${actions}</div>`;
+    }).join("");
+  } catch (e) { box.textContent = "লোড ব্যর্থ: " + e.message; }
+}
+
+$("wdList").onclick = async (ev) => {
+  const b = ev.target.closest("button[data-act]");
+  if (!b) return;
+  const ref = doc(db, "withdrawals", b.dataset.id);
+  const approve = b.dataset.act === "approve";
+  if (!confirm(approve ? "বিকাশ/নগদে টাকা পাঠিয়েছেন তো?" : "বাতিল করলে ইউজারের পয়েন্ট ফেরত যাবে। নিশ্চিত?")) return;
+  b.disabled = true;
+  try {
+    // ট্রানজ্যাকশনে যাচাই করা হয়, তাই একই রিকোয়েস্ট দুবার প্রক্রিয়া হয় না
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists() || snap.data().status !== "pending") throw new Error("আগেই প্রক্রিয়া করা হয়েছে");
+      if (approve) {
+        tx.update(ref, { status: "approved", processedAt: serverTimestamp() });
+      } else {
+        tx.update(ref, { status: "rejected", processedAt: serverTimestamp() });
+        tx.update(doc(db, "users", snap.data().uid), { points: increment(Number(snap.data().points)) });
+      }
+    });
+    say(approve ? "পরিশোধিত হিসেবে চিহ্নিত হয়েছে" : "বাতিল হয়েছে, পয়েন্ট ফেরত গেছে");
+    loadWithdrawals();
+  } catch (e) { say("ব্যর্থ: " + e.message); b.disabled = false; }
+};
+
+// ---------- ইউজার ----------
+async function loadUsers() {
+  $("userList").textContent = "লোড হচ্ছে...";
+  try {
+    const snap = await getDocs(query(collection(db, "users"), limit(300)));
+    allUsers = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    renderUsers();
+  } catch (e) { $("userList").textContent = "লোড ব্যর্থ: " + e.message; }
+}
+$("userSearch").oninput = renderUsers;
+
+function renderUsers() {
+  const q = $("userSearch").value.trim().toLowerCase();
+  const list = allUsers.filter((u) => !q || (u.username || "").includes(q) || (u.phone || "").includes(q));
+  $("userList").innerHTML = (`<div class="muted" style="margin-bottom:6px">মোট ইউজার: ${allUsers.length}</div>`) + (list.map((u) => `
+    <div class="card">
+      <div class="row"><b>${esc(u.username)}</b><span>${esc(u.points)} পয়েন্ট</span></div>
+      <div class="muted">${esc(u.phone)} · মোট এড ${esc(u.totalAds)} ${u.banned ? "· 🚫 বন্ধ" : ""}</div>
+      <div style="margin-top:8px">
+        <button class="${u.banned ? "ok" : "bad"}" data-act="ban" data-id="${esc(u.id)}" data-banned="${u.banned ? 1 : 0}">${u.banned ? "চালু করুন" : "বন্ধ করুন"}</button>
+        <button class="ghost" data-act="pts" data-id="${esc(u.id)}">পয়েন্ট বদলান</button>
+      </div>
+    </div>`).join("") || "কেউ নেই");
+}
+
+$("userList").onclick = async (ev) => {
+  const b = ev.target.closest("button[data-act]");
+  if (!b) return;
+  try {
+    if (b.dataset.act === "ban") {
+      await updateDoc(doc(db, "users", b.dataset.id), { banned: b.dataset.banned !== "1" });
+    } else {
+      const v = prompt("কত পয়েন্ট যোগ করবেন? (কমাতে মাইনাস দিন, যেমন -50)");
+      if (v === null || v.trim() === "" || isNaN(Number(v))) return;
+      await updateDoc(doc(db, "users", b.dataset.id), { points: increment(Math.trunc(Number(v))) });
+    }
+    loadUsers();
+  } catch (e) { say("ব্যর্থ: " + e.message); }
+};
+
+// ---------- সেটিংস ----------
+const FIELDS = ["pointsPerAd", "dailyAdLimit", "minGapSeconds", "minWithdrawPoints", "pointsPerTaka"];
+const DEFAULTS = { pointsPerAd: 10, dailyAdLimit: 20, minGapSeconds: 30, minWithdrawPoints: 1000, pointsPerTaka: 100, notice: "" };
+
+async function loadSettings() {
+  try {
+    const s = await getDoc(doc(db, "settings", "app"));
+    const d = { ...DEFAULTS, ...(s.exists() ? s.data() : {}) };
+    for (const f of FIELDS) $("s_" + f).value = d[f];
+    $("s_notice").value = d.notice || "";
+  } catch (e) { say("সেটিংস লোড ব্যর্থ: " + e.message); }
+}
+
+$("saveSettings").onclick = async () => {
+  const data = { notice: $("s_notice").value.trim() };
+  for (const f of FIELDS) {
+    const n = Math.trunc(Number($("s_" + f).value));
+    if (!Number.isFinite(n) || n < 0) { say("সংখ্যা ঠিকমতো দিন: " + f); return; }
+    data[f] = n;
+  }
+  if (data.pointsPerTaka < 1 || data.dailyAdLimit < 1 || data.minWithdrawPoints < 1) { say("লিমিট, ন্যূনতম উইথড্র ও রেট ১ বা তার বেশি হতে হবে"); return; }
+  try {
+    await setDoc(doc(db, "settings", "app"), data, { merge: true });
+    say("সেটিংস সেভ হয়েছে ✅");
+  } catch (e) { say("সেভ ব্যর্থ: " + e.message); }
+};
+</script>
+</body>
+</html>
