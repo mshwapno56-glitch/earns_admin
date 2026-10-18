@@ -54,6 +54,7 @@
     <div class="tabs">
       <button data-tab="wd" class="active">উইথড্র</button>
       <button data-tab="users">ইউজার</button>
+      <button data-tab="tasks">টাস্ক</button>
       <button data-tab="settings">সেটিংস</button>
     </div>
 
@@ -71,6 +72,21 @@
       <div id="userList"></div>
     </div>
 
+    <div id="tab-tasks" hidden>
+      <div class="card">
+        <b>নতুন টাস্ক (যেমন ফেসবুকে রিয়্যাক্ট/কমেন্ট/ফলো)</b>
+        <label>টাস্কের নাম</label><input id="t_title" placeholder="যেমন: আমার পেজ ফলো করুন">
+        <label>লিংক (ফেসবুক পোস্ট/পেজের)</label><input id="t_link" placeholder="https://facebook.com/...">
+        <label>কত পয়েন্ট দেবেন</label><input id="t_points" type="number" min="1">
+        <button id="addTask">টাস্ক যোগ করুন</button>
+      </div>
+      <b>চালু টাস্কের তালিকা</b>
+      <div id="taskList" style="margin-bottom:14px"></div>
+      <b>জমা দেওয়া টাস্ক (যাচাই করুন)</b>
+      <div class="muted" style="margin:4px 0 8px">ইউজারের ফেসবুক নাম দেখে আপনি নিজে যাচাই করে "ঠিক আছে" চাপুন। চাপলেই পয়েন্ট যোগ হবে।</div>
+      <div id="claimList"></div>
+    </div>
+
     <div id="tab-settings" hidden>
       <div class="card">
         <label>প্রতি এডে পয়েন্ট</label><input id="s_pointsPerAd" type="number" min="0">
@@ -78,6 +94,12 @@
         <label>দুই এডের মাঝে ন্যূনতম বিরতি (সেকেন্ড)</label><input id="s_minGapSeconds" type="number" min="0">
         <label>ন্যূনতম উইথড্র (পয়েন্ট)</label><input id="s_minWithdrawPoints" type="number" min="1">
         <label>কত পয়েন্টে ১ টাকা</label><input id="s_pointsPerTaka" type="number" min="1">
+        <label>স্পিন: দিনে কতবার</label><input id="s_spinPerDay" type="number" min="0">
+        <label>স্পিনের পয়েন্ট (কমা দিয়ে, যেমন 10,15,25,50,70,100,130)। কোনো সংখ্যা বেশিবার লিখলে সেটা বেশি পড়বে।</label><input id="s_spinPrizes">
+        <label>Unity Game ID</label><input id="s_unityGameId">
+        <label>Unity Rewarded Placement ID</label><input id="s_unityPlacementId">
+        <label>Unity টেস্ট মোড (টেস্ট এড, আয় হবে না)</label>
+        <select id="s_unityTestMode"><option value="1">চালু (টেস্ট)</option><option value="0">বন্ধ (আসল এড)</option></select>
         <label>অ্যাপে দেখানোর নোটিশ (ঐচ্ছিক)</label><input id="s_notice">
         <button id="saveSettings">সেভ করুন</button>
         <p class="muted">প্রথমবার সেভ করলে সেটিংস ডকুমেন্ট নিজে তৈরি হবে।</p>
@@ -89,7 +111,7 @@
 <script type="module">
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, getDocs, query, where, limit, writeBatch, increment, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import { getFirestore, collection, doc, getDoc, setDoc, updateDoc, getDocs, query, where, limit, deleteDoc, writeBatch, increment, serverTimestamp, runTransaction } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 // অ্যাপের অ্যাডমিন ইউজারনেমের ইমেইল। firestore.rules এর সাথে মিলতে হবে।
 const ADMIN_EMAIL = "shwapno@earnads.app";
@@ -156,13 +178,14 @@ $("loginBtn").onclick = async () => {
   } catch (e) { say("লগইন ব্যর্থ: ইউজারনেম বা পাসওয়ার্ড ভুল, অথবা কনফিগ ঠিক নেই (" + (e.code || e.message) + ")"); }
 };
 $("logoutBtn").onclick = () => signOut(auth);
-$("reloadBtn").onclick = () => { loadWithdrawals(); loadSettings(); allUsers = []; if (!$("tab-users").hidden) loadUsers(); };
+$("reloadBtn").onclick = () => { loadWithdrawals(); loadSettings(); allUsers = []; if (!$("tab-users").hidden) loadUsers(); if (!$("tab-tasks").hidden) loadTasks(); };
 
 document.querySelectorAll(".tabs button").forEach((b) => {
   b.onclick = () => {
     document.querySelectorAll(".tabs button").forEach((x) => x.classList.toggle("active", x === b));
-    for (const t of ["wd", "users", "settings"]) $("tab-" + t).hidden = (t !== b.dataset.tab);
+    for (const t of ["wd", "users", "tasks", "settings"]) $("tab-" + t).hidden = (t !== b.dataset.tab);
     if (b.dataset.tab === "users" && !allUsers.length) loadUsers();
+    if (b.dataset.tab === "tasks") loadTasks();
   };
 });
 
@@ -254,9 +277,87 @@ $("userList").onclick = async (ev) => {
   } catch (e) { say("ব্যর্থ: " + e.message); }
 };
 
+
+// ---------- টাস্ক ----------
+$("addTask").onclick = async () => {
+  const title = $("t_title").value.trim(), link = $("t_link").value.trim();
+  const points = Math.trunc(Number($("t_points").value));
+  if (!title || !/^https?:\/\//.test(link) || !(points >= 1)) { say("নাম, সঠিক লিংক (https://...) ও পয়েন্ট দিন"); return; }
+  try {
+    await setDoc(doc(collection(db, "tasks")), { title, link, points, active: true, createdAt: serverTimestamp() });
+    $("t_title").value = ""; $("t_link").value = ""; $("t_points").value = "";
+    say("টাস্ক যোগ হয়েছে ✅"); loadTasks();
+  } catch (e) { say("ব্যর্থ: " + e.message); }
+};
+
+async function loadTasks() {
+  $("taskList").textContent = "লোড হচ্ছে...";
+  $("claimList").textContent = "লোড হচ্ছে...";
+  try {
+    const ts = await getDocs(query(collection(db, "tasks"), limit(100)));
+    const tasks = ts.docs.map((d) => ({ id: d.id, ...d.data() }));
+    $("taskList").innerHTML = tasks.map((t) => `<div class="card">
+      <div class="row"><b>${esc(t.title)}</b><span>${esc(t.points)} পয়েন্ট</span></div>
+      <div class="muted" style="word-break:break-all">${esc(t.link)}</div>
+      <div style="margin-top:8px">
+        <button class="${t.active ? "ghost" : "ok"}" data-act="toggle" data-id="${esc(t.id)}" data-active="${t.active ? 1 : 0}">${t.active ? "বন্ধ করুন" : "চালু করুন"}</button>
+        <button class="bad" data-act="del" data-id="${esc(t.id)}">মুছুন</button>
+      </div></div>`).join("") || "কোনো টাস্ক নেই";
+    const cs = await getDocs(query(collection(db, "claims"), where("status", "==", "pending"), limit(100)));
+    const claims = cs.docs.map((d) => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => (a.createdAt?.seconds ?? 0) - (b.createdAt?.seconds ?? 0));
+    $("claimList").innerHTML = claims.map((c) => `<div class="card">
+      <div class="row"><b>${esc(c.username)}</b><span>${esc(c.points)} পয়েন্ট</span></div>
+      <div>${esc(c.taskTitle)}</div>
+      <div class="muted">ফেসবুক নাম/লিংক: ${esc(c.note || "দেয়নি")}</div>
+      <div style="margin-top:8px">
+        <button class="ok" data-act="approve" data-id="${esc(c.id)}">ঠিক আছে, পয়েন্ট দিন</button>
+        <button class="bad" data-act="reject" data-id="${esc(c.id)}">বাতিল</button>
+      </div></div>`).join("") || "কোনো অপেক্ষমাণ জমা নেই";
+  } catch (e) { $("taskList").textContent = "লোড ব্যর্থ: " + e.message; $("claimList").textContent = ""; }
+}
+
+$("taskList").onclick = async (ev) => {
+  const b = ev.target.closest("button[data-act]");
+  if (!b) return;
+  try {
+    if (b.dataset.act === "toggle") {
+      await updateDoc(doc(db, "tasks", b.dataset.id), { active: b.dataset.active !== "1" });
+    } else {
+      if (!confirm("টাস্কটি মুছে ফেলবেন?")) return;
+      await deleteDoc(doc(db, "tasks", b.dataset.id));
+    }
+    loadTasks();
+  } catch (e) { say("ব্যর্থ: " + e.message); }
+};
+
+$("claimList").onclick = async (ev) => {
+  const b = ev.target.closest("button[data-act]");
+  if (!b) return;
+  const ref = doc(db, "claims", b.dataset.id);
+  const approve = b.dataset.act === "approve";
+  b.disabled = true;
+  try {
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists() || snap.data().status !== "pending") throw new Error("আগেই প্রক্রিয়া করা হয়েছে");
+      if (approve) {
+        tx.update(ref, { status: "approved", processedAt: serverTimestamp() });
+        tx.update(doc(db, "users", snap.data().uid), { points: increment(Number(snap.data().points)) });
+      } else {
+        // বাতিল হলে জমাটি মুছে দিই, ইউজার চাইলে আবার জমা দিতে পারবে
+        tx.delete(ref);
+      }
+    });
+    say(approve ? "পয়েন্ট দেওয়া হয়েছে ✅" : "বাতিল হয়েছে");
+    loadTasks();
+  } catch (e) { say("ব্যর্থ: " + e.message); b.disabled = false; }
+};
+
 // ---------- সেটিংস ----------
-const FIELDS = ["pointsPerAd", "dailyAdLimit", "minGapSeconds", "minWithdrawPoints", "pointsPerTaka"];
-const DEFAULTS = { pointsPerAd: 10, dailyAdLimit: 20, minGapSeconds: 30, minWithdrawPoints: 1000, pointsPerTaka: 100, notice: "" };
+const FIELDS = ["pointsPerAd", "dailyAdLimit", "minGapSeconds", "minWithdrawPoints", "pointsPerTaka", "spinPerDay"];
+const DEFAULTS = { pointsPerAd: 10, dailyAdLimit: 20, minGapSeconds: 30, minWithdrawPoints: 1000, pointsPerTaka: 100, notice: "",
+  spinPerDay: 1, spinPrizes: [10, 15, 25, 50, 70, 100, 130], unityGameId: "800401720", unityPlacementId: "BP_Rewarded_Android", unityTestMode: true };
 
 async function loadSettings() {
   try {
@@ -264,6 +365,10 @@ async function loadSettings() {
     const d = { ...DEFAULTS, ...(s.exists() ? s.data() : {}) };
     for (const f of FIELDS) $("s_" + f).value = d[f];
     $("s_notice").value = d.notice || "";
+    $("s_spinPrizes").value = (d.spinPrizes || []).join(",");
+    $("s_unityGameId").value = d.unityGameId || "";
+    $("s_unityPlacementId").value = d.unityPlacementId || "";
+    $("s_unityTestMode").value = d.unityTestMode === false ? "0" : "1";
   } catch (e) { say("সেটিংস লোড ব্যর্থ: " + e.message); }
 }
 
@@ -275,6 +380,12 @@ $("saveSettings").onclick = async () => {
     data[f] = n;
   }
   if (data.pointsPerTaka < 1 || data.dailyAdLimit < 1 || data.minWithdrawPoints < 1) { say("লিমিট, ন্যূনতম উইথড্র ও রেট ১ বা তার বেশি হতে হবে"); return; }
+  const prizes = $("s_spinPrizes").value.split(",").map((x) => Math.trunc(Number(x.trim()))).filter((x) => Number.isFinite(x) && x > 0);
+  if (prizes.length < 2) { say("স্পিনে অন্তত ২টি পয়েন্ট দিন, কমা দিয়ে আলাদা করে"); return; }
+  data.spinPrizes = prizes;
+  data.unityGameId = $("s_unityGameId").value.trim();
+  data.unityPlacementId = $("s_unityPlacementId").value.trim();
+  data.unityTestMode = $("s_unityTestMode").value === "1";
   try {
     await setDoc(doc(db, "settings", "app"), data, { merge: true });
     say("সেটিংস সেভ হয়েছে ✅");
